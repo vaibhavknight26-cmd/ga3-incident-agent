@@ -6,7 +6,7 @@ import psycopg
 
 app = FastAPI(title="GA3 Q4 Incident Triage")
 PROFILE = "ga5-incident-agent/v2"
-MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 def canon(v): return json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=False)
 def digest(v): return hashlib.sha256(canon(v).encode()).hexdigest()
 def sid(): return uuid.uuid4().hex[:16]
