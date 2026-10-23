@@ -49,6 +49,56 @@ def valid_trace(req):
     m=re.fullmatch(r"00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})",raw)
     if m and int(m[1],16) and int(m[2],16):return m[1],m[2],req.headers.get("tracestate")
     return uuid.uuid4().hex,None,None
+def arguments_match_schema(value, schema):
+    """Validate model-generated arguments against the catalog's JSON Schema subset."""
+    if not isinstance(schema,dict):return True
+    if "enum" in schema and value not in schema["enum"]:return False
+    if "const" in schema and value!=schema["const"]:return False
+    if "anyOf" in schema and not any(arguments_match_schema(value,s) for s in schema["anyOf"]):return False
+    if "oneOf" in schema and sum(arguments_match_schema(value,s) for s in schema["oneOf"])!=1:return False
+    kind=schema.get("type")
+    if isinstance(kind,list):return any(arguments_match_schema(value,{**schema,"type":t}) for t in kind)
+    if kind=="object":
+        if not isinstance(value,dict):return False
+        props=schema.get("properties",{})
+        if not isinstance(props,dict):return False
+        if any(k not in value for k in schema.get("required",[])):return False
+        extra=schema.get("additionalProperties",True)
+        for k,v in value.items():
+            if k in props:
+                if not arguments_match_schema(v,props[k]):return False
+            elif extra is False:return False
+            elif isinstance(extra,dict) and not arguments_match_schema(v,extra):return False
+    elif kind=="array":
+        if not isinstance(value,list):return False
+        if "minItems" in schema and len(value)<schema["minItems"]:return False
+        if "maxItems" in schema and len(value)>schema["maxItems"]:return False
+        if not all(arguments_match_schema(v,schema.get("items",{})) for v in value):return False
+    elif kind=="string":
+        if not isinstance(value,str):return False
+        if "minLength" in schema and len(value)<schema["minLength"]:return False
+        if "maxLength" in schema and len(value)>schema["maxLength"]:return False
+        if "pattern" in schema and not re.search(schema["pattern"],value):return False
+    elif kind=="integer":
+        if not isinstance(value,int) or isinstance(value,bool):return False
+    elif kind=="number":
+        if not isinstance(value,(int,float)) or isinstance(value,bool):return False
+    elif kind=="boolean":
+        if not isinstance(value,bool):return False
+    elif kind=="null":
+        if value is not None:return False
+    if kind in ("integer","number"):
+        if "minimum" in schema and value<schema["minimum"]:return False
+        if "maximum" in schema and value>schema["maximum"]:return False
+    return True
+
+def catalog_arguments_valid(catalog, name, arguments):
+    if not isinstance(arguments,dict):return False
+    tool=next((t for t in catalog if isinstance(t,dict) and t.get("name")==name),None)
+    if tool is None:return False
+    schema=tool.get("parameters",tool.get("inputSchema",tool.get("schema")))
+    return arguments_match_schema(arguments,schema)
+
 def ai_plan(body):
     inc=body["incident"]; catalog=body["toolCatalog"]; policy=body["policy"]
     # Only non-sensitive incident context is sent. No credentials or private notes.
@@ -118,7 +168,7 @@ def ai_plan(body):
         logging.warning("Recovered model evidence from transcript; run=%s",body.get("runId"))
     ds=[]
     for d in p.get("diagnostics",[]):
-        if not isinstance(d,dict) or d.get("toolName") not in names or d["toolName"] in policy.get("effectTools",[]):continue
+        if not isinstance(d,dict) or d.get("toolName") not in names or d["toolName"] in policy.get("effectTools",[]) or not catalog_arguments_valid(catalog,d.get("toolName"),d.get("arguments",{})):continue
         ev=list(dict.fromkeys(x for x in d.get("evidence",[]) if x in evidence))
         if not ev:ev=[evidence[0]]
         ds.append({"toolName":d["toolName"],"arguments":d.get("arguments",{}),"evidence":ev})
@@ -127,7 +177,7 @@ def ai_plan(body):
         logging.error("AI diagnostics invalid; run=%s",body.get("runId"))
         raise HTTPException(503,"AI diagnostics invalid")
     e=p.get("effect",{})
-    if not isinstance(e,dict) or e.get("toolName") not in names or e.get("toolName") not in policy.get("effectTools",[]):
+    if not isinstance(e,dict) or e.get("toolName") not in names or e.get("toolName") not in policy.get("effectTools",[]) or not catalog_arguments_valid(catalog,e.get("toolName"),e.get("arguments",{})):
         logging.error("AI effect invalid; run=%s",body.get("runId"))
         raise HTTPException(503,"AI effect invalid")
     return {"rootCause":p["rootCause"],"evidence":evidence},ds,{"toolName":e["toolName"],"arguments":e.get("arguments",{})}
