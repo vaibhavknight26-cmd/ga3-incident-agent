@@ -86,8 +86,20 @@ def ai_plan(body):
     if p.get("rootCause") not in allowed:
         logging.error("AI root cause invalid; run=%s",body.get("runId"))
         raise HTTPException(503,"AI root cause invalid")
-    evidence_ids={i for i,_ in lines}
-    evidence=list(dict.fromkeys(x for x in p.get("evidence",[]) if x in evidence_ids))[:4]
+    evidence_ids=[i for i,_ in lines]
+    evidence_set=set(evidence_ids)
+    def normalize_evidence_id(value):
+        if not isinstance(value,str):return None
+        value=value.strip()
+        if value.startswith("[") and value.endswith("]"):value=value[1:-1].strip()
+        return value if value in evidence_set else None
+    evidence=[]
+    proposed=p.get("evidence",[])
+    if not isinstance(proposed,list):proposed=[]
+    for item in proposed:
+        normalized=normalize_evidence_id(item)
+        if normalized and normalized not in evidence:evidence.append(normalized)
+    evidence=evidence[:4]
     if len(evidence)<2:
         logging.error("AI evidence invalid; run=%s",body.get("runId"))
         raise HTTPException(503,"AI evidence invalid")
