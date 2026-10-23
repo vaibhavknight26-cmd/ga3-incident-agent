@@ -202,17 +202,28 @@ def dispatch(s,tool,arguments,phase,evidence,actionid=None,callid=None,attempt=1
     span(s,"POST tool/"+tool,3,parent,{"ga5.action.id":aid,"ga5.attempt":attempt,"http.request.method":"POST","http.request.resend_count":attempt-1},client)
     s["pending"].append(d);s["actionLog"].append(d)
     return d
+def status_is_final_attempt(outcome,dispatch_record):
+    return outcome.get("status")!=503 or dispatch_record.get("attempt")==2
+
 def update_client(s,d,o,rid):
     client=d["traceparent"].split("-")[2]
     z=next(x for x in s["spans"] if x["spanId"]==client)
     status=o.get("status")
     z["endTimeUnixNano"]=str(time.time_ns())
+    if status_is_final_attempt(o,d):
+        logical=next((x for x in s["spans"] if x["spanId"]==s["toolSpans"].get(d["actionId"])),None)
+        if logical:logical["endTimeUnixNano"]=z["endTimeUnixNano"]
     z["attributes"] += [attr("ga5.receipt.id",rid),attr("ga5.receipt.nonce",o.get("nonce","")),attr("http.response.status_code",status)]
     if status==0 or status>=400:
         z["status"]={"code":2};z["attributes"].append(attr("error.type","timeout" if status==0 else str(status)))
     else:z["status"]={"code":1}
 def complete(s,status):
+    finished=str(time.time_ns())
     s["status"]=status;s["pending"]=[];s["approvals"]=[]
+    # Parent spans must cover all asynchronous receipt-driven work.
+    for z in s["spans"]:
+        if z["spanId"]==s.get("agentSpan") or z["name"]=="POST /v2/incidents":
+            z["endTimeUnixNano"]=finished
 def ensure_join(s):
     diagnostic_actions=[d for d in s["actionLog"] if d["phase"]=="diagnostic" and d["attempt"]==1]
     if len(diagnostic_actions)>1 and not s.get("joined"):
