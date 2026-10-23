@@ -247,6 +247,9 @@ def process(s,body):
             update_client(s,d,o,body["receiptId"])
             if o["status"]==503 and d["attempt"]==1:
                 dispatch(s,d["toolName"],d["arguments"],d["phase"],d["evidence"],d["actionId"],d["callId"],2)
+            elif o["status"] in (200,201,202,204) and d["phase"]=="diagnostic" and o.get("resultClass") in ("diagnosis_not_confirmed","diagnosis_refuted","diagnosis_rejected","diagnosis_inconclusive"):
+                s["failed"]=True
+                if s["effect"]["toolName"] not in s["suppressed"]:s["suppressed"].append(s["effect"]["toolName"])
             elif o["status"] not in (200,201,202,204):
                 s["failed"]=True
                 if d["phase"]=="diagnostic":s["suppressed"].append(s["effect"]["toolName"])
