@@ -213,12 +213,14 @@ def update_client(s,d,o,rid):
     else:z["status"]={"code":1}
 def complete(s,status):
     s["status"]=status;s["pending"]=[];s["approvals"]=[]
-def after_diagnostics(s):
+def ensure_join(s):
     diagnostic_actions=[d for d in s["actionLog"] if d["phase"]=="diagnostic" and d["attempt"]==1]
     if len(diagnostic_actions)>1 and not s.get("joined"):
         links=[{"traceId":s["traceId"],"spanId":s["toolSpans"][d["actionId"]]} for d in diagnostic_actions]
         span(s,"incident.join",1,s["agentSpan"])["links"]=links
         s["joined"]=True
+def after_diagnostics(s):
+    ensure_join(s)
     e=s["effect"]
     if e["toolName"] in s["approvalTools"]:
         a={"approvalId":"appr_"+uuid.uuid4().hex,"actionId":"act_"+uuid.uuid4().hex,"toolName":e["toolName"],"argumentsDigest":digest(e["arguments"])}
@@ -250,6 +252,7 @@ def process(s,body):
                 if d["phase"]=="diagnostic":s["suppressed"].append(s["effect"]["toolName"])
         if s["pending"]:return
         if s["failed"]:
+            ensure_join(s)
             if any(d["phase"]=="diagnostic" for d in s["actionLog"]) and not s["effectStarted"] and s["effect"]["toolName"] not in s["suppressed"]:
                 s["suppressed"].append(s["effect"]["toolName"])
             complete(s,"failed");return
