@@ -26,9 +26,9 @@ def load(db,rid,lock=False):
     return cur.fetchone()
 def save(db,s):
     db.execute("UPDATE incident_q4_runs SET state=%s::jsonb WHERE run_id=%s",(canon(s),s["runId"]))
-def span(s,name,kind,parent="",extra=None,spanid=None):
+def span(s,name,kind,parent="",extra=None,spanid=None,start_ns=None):
     z={"traceId":s["traceId"],"spanId":spanid or sid(),"name":name,"kind":kind,
-       "startTimeUnixNano":str(time.time_ns()),"endTimeUnixNano":str(time.time_ns()+1000),
+       "startTimeUnixNano":str(start_ns or time.time_ns()),"endTimeUnixNano":str(time.time_ns()),
        "attributes":[attr("ga5.run.id",s["runId"]),attr("ga5.public.marker",s["marker"])]}
     if parent:z["parentSpanId"]=parent
     for k,v in (extra or {}).items():z["attributes"].append(attr(k,v))
@@ -124,6 +124,7 @@ def update_client(s,d,o,rid):
     client=d["traceparent"].split("-")[2]
     z=next(x for x in s["spans"] if x["spanId"]==client)
     status=o.get("status")
+    z["endTimeUnixNano"]=str(time.time_ns())
     z["attributes"] += [attr("ga5.receipt.id",rid),attr("ga5.receipt.nonce",o.get("nonce","")),attr("http.response.status_code",status)]
     if status==0 or status>=400:
         z["status"]={"code":2};z["attributes"].append(attr("error.type","timeout" if status==0 else str(status)))
@@ -131,6 +132,11 @@ def update_client(s,d,o,rid):
 def complete(s,status):
     s["status"]=status;s["pending"]=[];s["approvals"]=[]
 def after_diagnostics(s):
+    diagnostic_actions=[d for d in s["actionLog"] if d["phase"]=="diagnostic" and d["attempt"]==1]
+    if len(diagnostic_actions)>1 and not s.get("joined"):
+        links=[{"traceId":s["traceId"],"spanId":s["toolSpans"][d["actionId"]]} for d in diagnostic_actions]
+        span(s,"incident.join",1,s["agentSpan"])["links"]=links
+        s["joined"]=True
     e=s["effect"]
     if e["toolName"] in s["approvalTools"]:
         a={"approvalId":"appr_"+uuid.uuid4().hex,"actionId":"act_"+uuid.uuid4().hex,"toolName":e["toolName"],"argumentsDigest":digest(e["arguments"])}
@@ -184,16 +190,16 @@ async def create(body:dict,request:WebRequest):
         if row:
             if row[0]!=h:raise HTTPException(409,"Run ID conflict")
             return row[1].get("initialResponse",result(row[1]))
+    model_start=time.time_ns()
     diagnosis,diagnostics,effect=ai_plan(body)
+    model_end=time.time_ns()
     trace,parent,tracestate=valid_trace(request)
     s={"runId":rid,"marker":body.get("publicMarker",""),"traceId":trace,"tracestate":tracestate,"status":"waiting","diagnosis":diagnosis,"pending":[],"approvals":[],"actionLog":[],"receiptLog":[],"spans":[],"toolSpans":{},"effect":effect,"approvalTools":body["policy"].get("approvalRequiredFor",[]),"suppressed":[],"failed":False,"effectStarted":False}
-    root=span(s,"POST /v2/incidents",2,parent)
-    s["agentSpan"]=span(s,"invoke_agent "+body.get("agentName","incident-response"),1,root["spanId"])["spanId"]
-    span(s,"chat incident-plan",3,s["agentSpan"],{"gen_ai.operation.name":"chat","gen_ai.request.model":MODEL})
+    root=span(s,"POST /v2/incidents",2,parent,start_ns=model_start)
+    s["agentSpan"]=span(s,"invoke_agent "+body.get("agentName","incident-response"),1,root["spanId"],start_ns=model_start)["spanId"]
+    model_span=span(s,"chat incident-plan",3,s["agentSpan"],{"gen_ai.operation.name":"chat","gen_ai.request.model":MODEL},start_ns=model_start)
+    model_span["endTimeUnixNano"]=str(model_end)
     for d in diagnostics:dispatch(s,d["toolName"],d["arguments"],"diagnostic",d["evidence"])
-    if len(diagnostics)>1:
-        links=[{"traceId":trace,"spanId":s["toolSpans"][d["actionId"]]} for d in s["pending"]]
-        span(s,"incident.join",1,s["agentSpan"])["links"]=links
     s["initialResponse"]=result(s)
     with connect() as db:
         db.execute("INSERT INTO incident_q4_runs (run_id,request_hash,state) VALUES (%s,%s,%s::jsonb) ON CONFLICT DO NOTHING",(rid,h,canon(s)))
