@@ -1,4 +1,5 @@
-import os, json, re, uuid, hashlib, time
+import os, json, re, uuid, hashlib, time, logging
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from fastapi import FastAPI, HTTPException, Request as WebRequest
 import psycopg
@@ -67,7 +68,14 @@ def ai_plan(body):
         with urlopen(req,timeout=11) as response: data=json.load(response)
         raw="".join(x.get("text","") for x in data["candidates"][0]["content"]["parts"])
         p=json.loads(raw)
-    except Exception:
+    except HTTPError as exc:
+        logging.error("Gemini request failed: HTTP %s; model=%s",exc.code,MODEL)
+        raise HTTPException(503,"AI planning temporarily unavailable")
+    except (TimeoutError, URLError) as exc:
+        logging.error("Gemini network failure: %s; model=%s",type(exc).__name__,MODEL)
+        raise HTTPException(503,"AI planning temporarily unavailable")
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        logging.error("Gemini response parsing failed: %s; model=%s",type(exc).__name__,MODEL)
         raise HTTPException(503,"AI planning temporarily unavailable")
     allowed=inc["allowedRootCauses"]
     if p.get("rootCause") not in allowed:raise HTTPException(503,"AI root cause invalid")
