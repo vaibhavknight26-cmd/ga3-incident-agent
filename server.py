@@ -121,10 +121,12 @@ def ai_plan(body):
     url="https://generativelanguage.googleapis.com/v1beta/models/"+MODEL+":generateContent"
     payload={"contents":[{"parts":[{"text":canon(prompt)}]}],"generationConfig":{"responseMimeType":"application/json","temperature":0,"maxOutputTokens":1800}}
     p=None
-    for attempt in range(2):
+    # A single adequate deadline is more useful than two short requests:
+    # the prior 9s + 5s configuration repeatedly timed out on Render.
+    for attempt in range(1):
         try:
             req=Request(url,data=canon(payload).encode(),headers={"Content-Type":"application/json","x-goog-api-key":key})
-            with urlopen(req,timeout=9 if attempt==0 else 5) as response:
+            with urlopen(req,timeout=15) as response:
                 data=json.load(response)
             raw="".join(x.get("text","") for x in data["candidates"][0]["content"]["parts"])
             p=json.loads(raw)
