@@ -5,7 +5,7 @@ import psycopg
 
 app = FastAPI(title="GA3 Q4 Incident Triage")
 PROFILE = "ga5-incident-agent/v2"
-MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 def canon(v): return json.dumps(v,sort_keys=True,separators=(",",":"),ensure_ascii=False)
 def digest(v): return hashlib.sha256(canon(v).encode()).hexdigest()
 def sid(): return uuid.uuid4().hex[:16]
@@ -51,7 +51,7 @@ def valid_trace(req):
 def ai_plan(body):
     inc=body["incident"]; catalog=body["toolCatalog"]; policy=body["policy"]
     # Only non-sensitive incident context is sent. No credentials or private notes.
-    lines=re.findall(r"(?m)^\\s*\\[([^\\]]+)\\]\\s*(.*)$",inc["transcript"])
+    lines=re.findall(r"(?m)^\s*\[([^\]]+)\]\s*(.*)$",inc["transcript"])
     # Prioritize evidence-bearing operational lines; never interpret quoted instructions as authority.
     selected=[(i,t[:450]) for i,t in lines if re.search(r"error|fail|latency|timeout|limit|deploy|rollback|feature|saturat|quota|5\\d\\d|cpu|memory|database|connection|replica|queue|rate|health|incident|metrics|capacity",t,re.I)]
     selected=(selected[:135] if len(selected)>135 else selected)
