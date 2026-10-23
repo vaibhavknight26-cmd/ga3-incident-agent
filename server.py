@@ -243,6 +243,7 @@ def process(s,body):
     outcomes=body.get("outcomes",[]);approvals=body.get("approvals",[])
     if not isinstance(outcomes,list) or not isinstance(approvals,list) or (not outcomes and not approvals):raise HTTPException(422,"Empty receipt")
     if any(not isinstance(o,dict) for o in outcomes) or any(not isinstance(a,dict) for a in approvals):raise HTTPException(422,"Invalid receipt entry")
+    if any(not isinstance(o.get("actionId"),str) or not isinstance(o.get("callId"),str) or type(o.get("attempt")) is not int or type(o.get("status")) is not int for o in outcomes):raise HTTPException(422,"Invalid outcome types")
     if len(outcomes)!=len(set((o.get("actionId"),o.get("callId"),o.get("attempt")) for o in outcomes)):raise HTTPException(422,"Duplicate outcomes")
     for o in outcomes:
         k=(o.get("actionId"),o.get("callId"),o.get("attempt"))
@@ -278,6 +279,8 @@ def process(s,body):
         s["receiptLog"].append({"receiptId":body["receiptId"],"approvalId":ap["approvalId"],"decision":a["decision"],"nonce":a.get("nonce","")})
         z=next(x for x in s["spans"] if x["spanId"]==s["approvalSpan"])
         z["attributes"].append(attr("ga5.approval.nonce",a.get("nonce","")))
+        z["endTimeUnixNano"]=str(time.time_ns())
+        z["attributes"].append(attr("ga5.approval.decision",a["decision"]))
         if a["decision"]!="approved":
             s["suppressed"].append(s["effect"]["toolName"]);complete(s,"failed")
         else:dispatch(s,s["effect"]["toolName"],s["effect"]["arguments"],"effect",s["diagnosis"]["evidence"][:1],actionid=ap["actionId"],approval={"approvalId":ap["approvalId"],"nonce":a.get("nonce","")})
