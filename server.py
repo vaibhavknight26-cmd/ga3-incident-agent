@@ -229,6 +229,7 @@ def process(s,body):
     pending={(x["actionId"],x["callId"],x["attempt"]):x for x in s["pending"]}
     outcomes=body.get("outcomes",[]);approvals=body.get("approvals",[])
     if not isinstance(outcomes,list) or not isinstance(approvals,list) or (not outcomes and not approvals):raise HTTPException(422,"Empty receipt")
+    if any(not isinstance(o,dict) for o in outcomes) or any(not isinstance(a,dict) for a in approvals):raise HTTPException(422,"Invalid receipt entry")
     if len(outcomes)!=len(set((o.get("actionId"),o.get("callId"),o.get("attempt")) for o in outcomes)):raise HTTPException(422,"Duplicate outcomes")
     for o in outcomes:
         k=(o.get("actionId"),o.get("callId"),o.get("attempt"))
@@ -240,7 +241,7 @@ def process(s,body):
         for o in outcomes:
             d=pending[(o["actionId"],o["callId"],o["attempt"])]
             s["pending"].remove(d)
-            s["receiptLog"].append(dict(receiptId=body["receiptId"],**o))
+            s["receiptLog"].append({k:v for k,v in {"receiptId":body["receiptId"],"actionId":o.get("actionId"),"callId":o.get("callId"),"attempt":o.get("attempt"),"status":o.get("status"),"resultClass":o.get("resultClass"),"nonce":o.get("nonce"),"errorType":o.get("errorType")}.items() if v is not None})
             update_client(s,d,o,body["receiptId"])
             if o["status"]==503 and d["attempt"]==1:
                 dispatch(s,d["toolName"],d["arguments"],d["phase"],d["evidence"],d["actionId"],d["callId"],2)
@@ -248,7 +249,10 @@ def process(s,body):
                 s["failed"]=True
                 if d["phase"]=="diagnostic":s["suppressed"].append(s["effect"]["toolName"])
         if s["pending"]:return
-        if s["failed"]:complete(s,"failed");return
+        if s["failed"]:
+            if any(d["phase"]=="diagnostic" for d in s["actionLog"]) and not s["effectStarted"] and s["effect"]["toolName"] not in s["suppressed"]:
+                s["suppressed"].append(s["effect"]["toolName"])
+            complete(s,"failed");return
         if not s["effectStarted"]:
             s["effectStarted"]=True;after_diagnostics(s)
         else:complete(s,"completed")
