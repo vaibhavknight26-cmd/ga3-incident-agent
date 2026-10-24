@@ -289,7 +289,7 @@ def process(s,body):
 @app.get("/health")
 def health():return {"status":"ok"}
 @app.post("/v2/incidents")
-async def create(body:dict,request:WebRequest):
+def create(body:dict,request:WebRequest):
     if body.get("profile")!=PROFILE or not isinstance(body.get("runId"),str) or not body["runId"] or not isinstance(body.get("incident"),dict) or not isinstance(body.get("toolCatalog"),list) or not isinstance(body.get("policy"),dict):raise HTTPException(422,"Invalid incident")
     rid=body["runId"];h=digest(body)
     init()
@@ -315,7 +315,7 @@ async def create(body:dict,request:WebRequest):
         if row[0]!=h:raise HTTPException(409,"Run ID conflict")
         return result(row[1])
 @app.post("/v2/incidents/{run_id}/receipts")
-async def receipts(run_id:str,body:dict):
+def receipts(run_id:str,body:dict):
     rid=body.get("receiptId")
     if not isinstance(rid,str) or not rid:raise HTTPException(422,"Missing receipt ID")
     h=digest(body)
