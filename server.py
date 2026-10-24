@@ -99,6 +99,18 @@ def catalog_arguments_valid(catalog, name, arguments):
     schema=tool.get("parameters",tool.get("inputSchema",tool.get("schema")))
     return arguments_match_schema(arguments,schema)
 
+def scrub_model_prompt(value, secrets):
+    """Remove caller-declared secrets from all text sent to the model."""
+    if isinstance(value, str):
+        for secret in secrets:
+            value = value.replace(secret, "[REDACTED]")
+        return value
+    if isinstance(value, list):
+        return [scrub_model_prompt(item, secrets) for item in value]
+    if isinstance(value, dict):
+        return {k: scrub_model_prompt(v, secrets) for k, v in value.items()}
+    return value
+
 def ai_plan(body):
     inc=body["incident"]; catalog=body["toolCatalog"]; policy=body["policy"]
     # Only non-sensitive incident context is sent. No credentials or private notes.
@@ -136,26 +148,26 @@ def ai_plan(body):
     key=os.getenv("GEMINI_API_KEY")
     if not key:raise HTTPException(503,"GEMINI_API_KEY missing")
     url="https://generativelanguage.googleapis.com/v1beta/models/"+MODEL+":generateContent"
+    sensitive=body.get("sensitive",{})
+    secrets=[]
+    if isinstance(sensitive,dict):
+        secrets=[v for v in sensitive.values() if isinstance(v,str) and v]
+    prompt=scrub_model_prompt(prompt,sorted(set(secrets),key=len,reverse=True))
     payload={"contents":[{"parts":[{"text":canon(prompt)}]}],"generationConfig":{"responseMimeType":"application/json","temperature":0,"maxOutputTokens":1800}}
     p=None
-    # A single adequate deadline is more useful than two short requests:
-    # the prior 9s + 5s configuration repeatedly timed out on Render.
-    for attempt in range(2):
-        try:
-            req=Request(url,data=canon(payload).encode(),headers={"Content-Type":"application/json","x-goog-api-key":key})
-            with urlopen(req,timeout=8 if attempt == 0 else 6) as response:
-                data=json.load(response)
-            raw="".join(x.get("text","") for x in data["candidates"][0]["content"]["parts"])
-            p=json.loads(raw)
-            break
-        except HTTPError as exc:
-            logging.error("Gemini HTTP %s; model=%s; attempt=%s",exc.code,MODEL,attempt+1)
-            if exc.code not in (429,500,502,503,504) or attempt == 1:break
-        except (TimeoutError, URLError) as exc:
-            logging.error("Gemini network %s; model=%s; attempt=%s",type(exc).__name__,MODEL,attempt+1)
-        except (ValueError, KeyError, IndexError, TypeError) as exc:
-            logging.error("Gemini parsing %s; model=%s; attempt=%s",type(exc).__name__,MODEL,attempt+1)
-        if attempt==0:time.sleep(0.1)
+    # One invocation per new run; never silently retry a model request.
+    try:
+        req=Request(url,data=canon(payload).encode(),headers={"Content-Type":"application/json","x-goog-api-key":key})
+        with urlopen(req,timeout=14) as response:
+            data=json.load(response)
+        raw="".join(x.get("text","") for x in data["candidates"][0]["content"]["parts"])
+        p=json.loads(raw)
+    except HTTPError as exc:
+        logging.error("Gemini HTTP %s; model=%s",exc.code,MODEL)
+    except (TimeoutError, URLError) as exc:
+        logging.error("Gemini network %s; model=%s",type(exc).__name__,MODEL)
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        logging.error("Gemini parsing %s; model=%s",type(exc).__name__,MODEL)
     if not isinstance(p,dict):
         raise HTTPException(503,"AI planning temporarily unavailable")
     allowed=inc["allowedRootCauses"]
@@ -275,7 +287,7 @@ def process(s,body):
             update_client(s,d,o,body["receiptId"])
             if o["status"]==503 and d["attempt"]==1:
                 dispatch(s,d["toolName"],d["arguments"],d["phase"],d["evidence"],d["actionId"],d["callId"],2)
-            elif o["status"] in (200,201,202,204) and d["phase"]=="diagnostic" and o.get("resultClass")!="diagnosis_confirmed":
+            elif o["status"] in (200,201,202,204) and ((d["phase"]=="diagnostic" and o.get("resultClass")!="diagnosis_confirmed") or (d["phase"]=="effect" and o.get("resultClass")!="effect_succeeded")):
                 s["failed"]=True
                 if s["effect"]["toolName"] not in s["suppressed"]:s["suppressed"].append(s["effect"]["toolName"])
             elif o["status"] not in (200,201,202,204):
