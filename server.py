@@ -275,7 +275,7 @@ def process(s,body):
             update_client(s,d,o,body["receiptId"])
             if o["status"]==503 and d["attempt"]==1:
                 dispatch(s,d["toolName"],d["arguments"],d["phase"],d["evidence"],d["actionId"],d["callId"],2)
-            elif o["status"] in (200,201,202,204) and d["phase"]=="diagnostic" and o.get("resultClass") in ("diagnosis_not_confirmed","diagnosis_refuted","diagnosis_rejected","diagnosis_inconclusive"):
+            elif o["status"] in (200,201,202,204) and d["phase"]=="diagnostic" and o.get("resultClass")!="diagnosis_confirmed":
                 s["failed"]=True
                 if s["effect"]["toolName"] not in s["suppressed"]:s["suppressed"].append(s["effect"]["toolName"])
             elif o["status"] not in (200,201,202,204):
@@ -308,22 +308,23 @@ def create(body:dict,request:WebRequest):
     rid=body["runId"];h=digest(body)
     init()
     with connect() as db:
+        # Serialize same-run initial requests before the AI call.
+        db.execute("SELECT pg_advisory_xact_lock(hashtext(%s))",(rid,))
         row=load(db,rid)
         if row:
             if row[0]!=h:raise HTTPException(409,"Run ID conflict")
             return row[1].get("initialResponse",result(row[1]))
-    model_start=time.time_ns()
-    diagnosis,diagnostics,effect=ai_plan(body)
-    model_end=time.time_ns()
-    trace,parent,tracestate=valid_trace(request)
-    s={"runId":rid,"marker":body.get("publicMarker",""),"traceId":trace,"tracestate":tracestate,"status":"waiting","diagnosis":diagnosis,"pending":[],"approvals":[],"actionLog":[],"receiptLog":[],"spans":[],"toolSpans":{},"effect":effect,"approvalTools":body["policy"].get("approvalRequiredFor",[]),"suppressed":[],"failed":False,"effectStarted":False}
-    root=span(s,"POST /v2/incidents",2,parent,start_ns=model_start)
-    s["agentSpan"]=span(s,"invoke_agent "+body.get("agentName","incident-response"),1,root["spanId"],start_ns=model_start)["spanId"]
-    model_span=span(s,"chat incident-plan",3,s["agentSpan"],{"gen_ai.operation.name":"chat","gen_ai.request.model":MODEL},start_ns=model_start)
-    model_span["endTimeUnixNano"]=str(model_end)
-    for d in diagnostics:dispatch(s,d["toolName"],d["arguments"],"diagnostic",d["evidence"])
-    s["initialResponse"]=result(s)
-    with connect() as db:
+        model_start=time.time_ns()
+        diagnosis,diagnostics,effect=ai_plan(body)
+        model_end=time.time_ns()
+        trace,parent,tracestate=valid_trace(request)
+        s={"runId":rid,"marker":body.get("publicMarker",""),"traceId":trace,"tracestate":tracestate,"status":"waiting","diagnosis":diagnosis,"pending":[],"approvals":[],"actionLog":[],"receiptLog":[],"spans":[],"toolSpans":{},"effect":effect,"approvalTools":body["policy"].get("approvalRequiredFor",[]),"suppressed":[],"failed":False,"effectStarted":False}
+        root=span(s,"POST /v2/incidents",2,parent,start_ns=model_start)
+        s["agentSpan"]=span(s,"invoke_agent "+body.get("agentName","incident-response"),1,root["spanId"],start_ns=model_start)["spanId"]
+        model_span=span(s,"chat incident-plan",3,s["agentSpan"],{"gen_ai.operation.name":"chat","gen_ai.request.model":MODEL},start_ns=model_start)
+        model_span["endTimeUnixNano"]=str(model_end)
+        for d in diagnostics:dispatch(s,d["toolName"],d["arguments"],"diagnostic",d["evidence"])
+        s["initialResponse"]=result(s)
         db.execute("INSERT INTO incident_q4_runs (run_id,request_hash,state) VALUES (%s,%s,%s::jsonb) ON CONFLICT DO NOTHING",(rid,h,canon(s)))
         row=load(db,rid)
         if row[0]!=h:raise HTTPException(409,"Run ID conflict")
