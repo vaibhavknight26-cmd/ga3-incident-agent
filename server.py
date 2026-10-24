@@ -250,6 +250,7 @@ def process(s,body):
     for o in outcomes:
         k=(o.get("actionId"),o.get("callId"),o.get("attempt"))
         if k not in pending or o.get("status") not in (0,200,201,202,204,400,403,404,409,429,500,502,503,504):raise HTTPException(422,"Invalid outcome")
+        if o.get("status")==0 and o.get("errorType")!="timeout":raise HTTPException(422,"Invalid timeout outcome")
     if approvals:
         if len(approvals)!=1 or not s["approvals"] or approvals[0].get("approvalId")!=s["approvals"][0]["approvalId"] or approvals[0].get("decision") not in ("approved","denied"):raise HTTPException(422,"Invalid approval")
     if outcomes and approvals:raise HTTPException(422,"Mixed receipt phases")
