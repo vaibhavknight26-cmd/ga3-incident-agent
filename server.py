@@ -189,17 +189,8 @@ def ai_plan(body):
         if normalized and normalized not in evidence:evidence.append(normalized)
     evidence=evidence[:4]
     if len(evidence)<2:
-        # Recover using only actual transcript IDs, prioritizing operational evidence.
-        # Never fabricate an evidence ID or use an ID absent from the transcript.
-        for candidate_id in fallback_evidence:
-            if candidate_id in evidence_set and candidate_id not in evidence:
-                evidence.append(candidate_id)
-            if len(evidence)>=2:break
-        evidence=evidence[:4]
-        if len(evidence)<2:
-            logging.error("Insufficient transcript evidence; run=%s",body.get("runId"))
-            raise HTTPException(422,"Incident has fewer than two evidence IDs")
-        logging.warning("Recovered model evidence from transcript; run=%s",body.get("runId"))
+        logging.error("Insufficient model-supported evidence; run=%s",body.get("runId"))
+        raise HTTPException(503,"AI evidence invalid")
     ds=[]
     for d in (p.get("diagnostics") if isinstance(p.get("diagnostics"),list) else []):
         if not isinstance(d,dict) or d.get("toolName") not in names or d["toolName"] in policy.get("effectTools",[]) or not catalog_arguments_valid(catalog,d.get("toolName"),d.get("arguments",{})):continue
