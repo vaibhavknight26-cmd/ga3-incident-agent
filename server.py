@@ -117,7 +117,7 @@ def ai_plan(body):
     lines=re.findall(r"(?m)^\s*\[([^\]]+)\]\s*(.*)$",inc["transcript"])
     # Rank evidence by diagnostic specificity, not broad operational keywords.
     # Repeated routine/healthy lines must not crowd out rare causal observations.
-    indexed=[(pos,i,t[:320]) for pos,(i,t) in enumerate(lines)]
+    indexed=[(pos,i,t[:420]) for pos,(i,t) in enumerate(lines)]
     strong=re.compile(r"immediately after|following (?:the )?(?:deploy|release)|introduced|regression|root cause|caused by|correlat|increased from|rose from|spiked from|jumped from|previous (?:release|deployment)|last known good|rollback target|confirmed|exceptions?|stack trace|crash|exhausted|saturat|timed out|throttl|outage|failure|failing|error rate|5\\d\\d|breach|degrad|dropped|denied",re.I)
     contextual=re.compile(r"deploy|release|version|feature flag|database|connection|network|upstream|queue|capacity|limit|latency|error|timeout|memory|cpu|replica|payment|checkout|rollback",re.I)
     routine=re.compile(r"routine|normal|healthy|no (?:customer-facing )?errors|no issues|within baseline|heartbeat|health monitoring|all green",re.I)
@@ -135,10 +135,10 @@ def ai_plan(body):
         if repeat:score-=min(12,5+repeat)
         ranked.append((score,pos,i,t))
     # Highest-value evidence plus a small chronological sample for context.
-    chosen={x[1] for x in sorted(ranked,key=lambda x:(-x[0],-x[1]))[:70]}
+    chosen={x[1] for x in sorted(ranked,key=lambda x:(-x[0],-x[1]))[:110]}
     if indexed:
-        for k in range(min(10,len(indexed))):
-            chosen.add(round(k*(len(indexed)-1)/max(1,min(10,len(indexed))-1)))
+        for k in range(min(16,len(indexed))):
+            chosen.add(round(k*(len(indexed)-1)/max(1,min(16,len(indexed))-1)))
     selected=[(i,t) for pos,i,t in indexed if pos in chosen]
     # Fallback evidence must come from highly ranked observations, never the
     # first arbitrary transcript line.
