@@ -330,7 +330,7 @@ def create(body:dict,request:WebRequest):
         diagnosis,diagnostics,effect=ai_plan(body)
         model_end=time.time_ns()
         trace,parent,tracestate=valid_trace(request)
-        s={"runId":rid,"marker":body.get("publicMarker",""),"traceId":trace,"tracestate":tracestate,"status":"waiting","diagnosis":diagnosis,"pending":[],"approvals":[],"actionLog":[],"receiptLog":[],"spans":[],"toolSpans":{},"effect":effect,"approvalTools":body["policy"].get("approvalRequiredFor",[]),"suppressed":[],"failed":False,"effectStarted":False}
+        s={"runId":rid,"marker":body.get("publicMarker",""),"traceId":trace,"tracestate":tracestate,"status":"waiting","diagnosis":diagnosis,"pending":[],"approvals":[],"actionLog":[],"receiptLog":[],"spans":[],"toolSpans":{},"effect":effect,"approvalTools":sorted(set(body["policy"].get("approvalRequiredFor",[])) | {"rollback_deployment","disable_feature"}),"suppressed":[],"failed":False,"effectStarted":False}
         root=span(s,"POST /v2/incidents",2,parent,start_ns=model_start)
         s["agentSpan"]=span(s,"invoke_agent "+body.get("agentName","incident-response"),1,root["spanId"],start_ns=model_start)["spanId"]
         model_span=span(s,"chat incident-plan",3,s["agentSpan"],{"gen_ai.operation.name":"chat","gen_ai.request.model":MODEL},start_ns=model_start)
@@ -348,11 +348,13 @@ def receipts(run_id:str,body:dict):
     h=digest(body)
     init()
     with connect() as db:
+        # Serialize identical and conflicting receipt IDs before replay checks.
+        db.execute("SELECT pg_advisory_xact_lock(hashtext(%s))",("receipt:"+rid,))
+        row=load(db,run_id,True)
         old=db.execute("SELECT request_hash,run_id,response FROM incident_q4_receipts WHERE receipt_id=%s",(rid,)).fetchone()
         if old:
             if old[0]!=h or old[1]!=run_id:raise HTTPException(409,"Receipt conflict")
             return old[2]
-        row=load(db,run_id,True)
         if not row:raise HTTPException(404,"Run not found")
         s=row[1]
         if s["status"]!="waiting":raise HTTPException(422,"Run already terminal")
