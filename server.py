@@ -299,9 +299,6 @@ def process(s,body):
             update_client(s,d,o,body["receiptId"])
             if o["status"]==503 and d["attempt"]==1:
                 dispatch(s,d["toolName"],d["arguments"],d["phase"],d["evidence"],d["actionId"],d["callId"],2,approval={"approvalId":d["approvalId"],"nonce":d["approvalNonce"]} if "approvalId" in d else None)
-            elif False:  # Success resultClass is informational; HTTP status is authoritative.
-                s["failed"]=True
-                if s["effect"]["toolName"] not in s["suppressed"]:s["suppressed"].append(s["effect"]["toolName"])
             elif o["status"] not in (200,201,202,204):
                 s["failed"]=True
                 if d["phase"]=="diagnostic" and s["effect"]["toolName"] not in s["suppressed"]:s["suppressed"].append(s["effect"]["toolName"])
