@@ -11,7 +11,7 @@ def canon(v): return json.dumps(v,sort_keys=True,separators=(",",":"),ensure_asc
 def digest(v): return hashlib.sha256(canon(v).encode()).hexdigest()
 def sid(): return uuid.uuid4().hex[:16]
 def attr(k,v):
-    if isinstance(v,int): return {"key":k,"value":{"intValue":str(v)}}
+    if isinstance(v,int): return {"key":k,"value":{"intValue":v}}
     return {"key":k,"value":{"stringValue":str(v)}}
 def connect():
     url=os.getenv("DATABASE_URL")
@@ -41,7 +41,7 @@ def result(s):
     if s["status"]=="waiting":
         base.update(dispatches=s["pending"],approvals=s["approvals"])
     else:
-        base.update(chosenEffect=s["effect"]["toolName"] if s.get("effect") else None,
+        base.update(chosenEffect=s["effect"]["toolName"] if s.get("effectStarted") and s["effect"]["toolName"] not in s["suppressed"] else None,
                     suppressed=s["suppressed"],actionLog=s["actionLog"],receiptLog=s["receiptLog"],otlp=make_trace(s))
     return base
 def valid_trace(req):
@@ -243,7 +243,8 @@ def update_client(s,d,o,rid):
     if status_is_final_attempt(o,d):
         logical=next((x for x in s["spans"] if x["spanId"]==s["toolSpans"].get(d["actionId"])),None)
         if logical:logical["endTimeUnixNano"]=z["endTimeUnixNano"]
-    z["attributes"] += [attr("ga5.receipt.id",rid),attr("ga5.receipt.nonce",o.get("nonce","")),attr("http.response.status_code",status)]
+    z["attributes"] += [attr("ga5.receipt.id",rid),attr("ga5.receipt.nonce",o.get("nonce",""))]
+    if status!=0:z["attributes"].append(attr("http.response.status_code",status))
     if status==0 or status>=400:
         z["status"]={"code":2};z["attributes"].append(attr("error.type","timeout" if status==0 else str(status)))
     else:z["status"]={"code":1}
@@ -279,8 +280,9 @@ def process(s,body):
         k=(o.get("actionId"),o.get("callId"),o.get("attempt"))
         if k not in pending or o.get("status") not in (0,200,201,202,204,400,403,404,409,429,500,502,503,504):raise HTTPException(422,"Invalid outcome")
         if o.get("status")==0 and o.get("errorType")!="timeout":raise HTTPException(422,"Invalid timeout outcome")
+        if not isinstance(o.get("nonce"),str) or not o["nonce"]:raise HTTPException(422,"Invalid receipt nonce")
     if approvals:
-        if len(approvals)!=1 or not s["approvals"] or approvals[0].get("approvalId")!=s["approvals"][0]["approvalId"] or approvals[0].get("decision") not in ("approved","denied"):raise HTTPException(422,"Invalid approval")
+        if len(approvals)!=1 or not s["approvals"] or approvals[0].get("approvalId")!=s["approvals"][0]["approvalId"] or approvals[0].get("decision") not in ("approved","denied") or not isinstance(approvals[0].get("nonce"),str) or not approvals[0]["nonce"]:raise HTTPException(422,"Invalid approval")
     if outcomes and approvals:raise HTTPException(422,"Mixed receipt phases")
     if outcomes:
         for o in outcomes:
@@ -289,8 +291,8 @@ def process(s,body):
             s["receiptLog"].append({k:v for k,v in {"receiptId":body["receiptId"],"actionId":o.get("actionId"),"callId":o.get("callId"),"attempt":o.get("attempt"),"status":o.get("status"),"resultClass":o.get("resultClass"),"nonce":o.get("nonce"),"errorType":o.get("errorType")}.items() if v is not None})
             update_client(s,d,o,body["receiptId"])
             if o["status"]==503 and d["attempt"]==1:
-                dispatch(s,d["toolName"],d["arguments"],d["phase"],d["evidence"],d["actionId"],d["callId"],2)
-            elif o["status"] in (200,201,202,204) and ((d["phase"]=="diagnostic" and o.get("resultClass")!="diagnosis_confirmed") or (d["phase"]=="effect" and o.get("resultClass") not in ("effect_applied","effect_succeeded"))):
+                dispatch(s,d["toolName"],d["arguments"],d["phase"],d["evidence"],d["actionId"],d["callId"],2,approval={"approvalId":d["approvalId"],"nonce":d["approvalNonce"]} if "approvalId" in d else None)
+            elif o["status"] in (200,201,202,204) and d["phase"]=="diagnostic" and o.get("resultClass") not in (None,"diagnosis_confirmed"):
                 s["failed"]=True
                 if s["effect"]["toolName"] not in s["suppressed"]:s["suppressed"].append(s["effect"]["toolName"])
             elif o["status"] not in (200,201,202,204):
@@ -328,7 +330,7 @@ def create(body:dict,request:WebRequest):
         row=load(db,rid)
         if row:
             if row[0]!=h:raise HTTPException(409,"Run ID conflict")
-            return row[1].get("initialResponse",result(row[1]))
+            return result(row[1])
         model_start=time.time_ns()
         diagnosis,diagnostics,effect=ai_plan(body)
         model_end=time.time_ns()
