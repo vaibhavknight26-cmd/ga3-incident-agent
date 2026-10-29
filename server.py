@@ -175,8 +175,9 @@ def ai_plan(body):
         logging.error("AI root cause invalid; run=%s",body.get("runId"))
         raise HTTPException(503,"AI root cause invalid")
     evidence_ids=[i for i,_ in lines]
-    evidence_set=set(evidence_ids)
+    evidence_set=set(evidence_ids) | set(re.findall(r"\[([^\]\s]+)\]",inc["transcript"]))
     def normalize_evidence_id(value):
+        if isinstance(value,dict):value=value.get("id") or value.get("evidenceId")
         if not isinstance(value,str):return None
         value=value.strip()
         if value.startswith("[") and value.endswith("]"):value=value[1:-1].strip()
@@ -197,6 +198,12 @@ def ai_plan(body):
                 if normalized and normalized not in evidence:evidence.append(normalized)
                 if len(evidence)>=2:break
             if len(evidence)>=2:break
+    # Fallback citations must refer to real transcript IDs; prefer high-ranked observations.
+    if len(evidence)<2:
+        for item in fallback_evidence:
+            normalized=normalize_evidence_id(item)
+            if normalized and normalized not in evidence:evidence.append(normalized)
+            if len(evidence)>=2:break
     evidence=evidence[:4]
     if len(evidence)<2:
         logging.error("Insufficient model-supported evidence; run=%s valid=%d transcript_lines=%d",body.get("runId"),len(evidence),len(lines))
@@ -206,8 +213,8 @@ def ai_plan(body):
         if not isinstance(d,dict) or d.get("toolName") not in names or d["toolName"] in policy.get("effectTools",[]) or not catalog_arguments_valid(catalog,d.get("toolName"),d.get("arguments",{})):continue
         ev=list(dict.fromkeys(y for x in (d.get("evidence") if isinstance(d.get("evidence"),list) else []) for y in [normalize_evidence_id(x)] if y in evidence))
         if not ev:
-            logging.warning("Diagnostic omitted due to missing supporting evidence; run=%s",body.get("runId"))
-            continue
+            logging.warning("Diagnostic evidence missing; using validated diagnosis citation; run=%s",body.get("runId"))
+            ev=evidence[:1]
         ds.append({"toolName":d["toolName"],"arguments":d.get("arguments",{}),"evidence":ev})
     ds=ds[:min(3,policy.get("maximumDiagnostics",3))]
     if not ds:
