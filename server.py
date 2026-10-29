@@ -187,9 +187,19 @@ def ai_plan(body):
     for item in proposed:
         normalized=normalize_evidence_id(item)
         if normalized and normalized not in evidence:evidence.append(normalized)
+    # Recover additional transcript-backed citations explicitly supplied
+    # with diagnostic steps when the model omits them at the top level.
+    if len(evidence)<2:
+        for diagnostic in (p.get("diagnostics") if isinstance(p.get("diagnostics"),list) else []):
+            if not isinstance(diagnostic,dict): continue
+            for item in (diagnostic.get("evidence") if isinstance(diagnostic.get("evidence"),list) else []):
+                normalized=normalize_evidence_id(item)
+                if normalized and normalized not in evidence:evidence.append(normalized)
+                if len(evidence)>=2:break
+            if len(evidence)>=2:break
     evidence=evidence[:4]
     if len(evidence)<2:
-        logging.error("Insufficient model-supported evidence; run=%s",body.get("runId"))
+        logging.error("Insufficient model-supported evidence; run=%s valid=%d transcript_lines=%d",body.get("runId"),len(evidence),len(lines))
         raise HTTPException(503,"AI evidence invalid")
     ds=[]
     for d in (p.get("diagnostics") if isinstance(p.get("diagnostics"),list) else []):
